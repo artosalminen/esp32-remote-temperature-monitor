@@ -1,0 +1,7 @@
+# Real credentials — never commit
+secrets.yaml
+
+# ESPHome build output and local tooling
+.esphome/
+.venv/
+*.bin
