@@ -5,7 +5,7 @@
 # Public (no login), on the site's WiFi:  http://tempmon.local/  (or the board's IP)
 #   current temperature + 24 h / 3 d / 7 d / 14 d chart of 2-min averages kept in RAM.
 #   Read-only: the device has no settings reachable over the network.
-# Long-term history: every 2-min average is pushed to a private ThingSpeak channel
+# Long-term history: every 2-min average is pushed to a ThingSpeak channel
 #   (field1 = °C, field2 = WiFi RSSI), stamped with its measurement time (SNTP).
 #   Points not yet uploaded (internet outage) are kept and sent later.
 #   e.g. Home Assistant can read it from there.

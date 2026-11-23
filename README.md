@@ -5,7 +5,7 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 
 - **Anyone on the site's WiFi** opens `http://tempmon.local/` and sees the current
   temperature plus a 24 h / 3 d / 7 d / 14 d chart. No app, no login.
-- **You** get the full long-term history in a private [ThingSpeak](https://thingspeak.mathworks.com)
+- **You** get the full long-term history in a [ThingSpeak](https://thingspeak.mathworks.com)
   channel, and from there in Home Assistant (or anything else that can read an HTTP API).
 - **No inbound access needed** at the site: no port forwarding, DDNS, VPN or local server.
   The board only makes outgoing HTTPS requests.
@@ -17,9 +17,9 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 ┌──────────────────────────────────────┐
 │ DS18S20 ─1-Wire─ ESP32 (ESPHome)     │  HTTPS, every 2 min    ┌────────────────┐
 │                   │  14 days of      │ ─────────────────────▶ │  ThingSpeak    │
-│                   │  2-min averages  │                        │  private chan. │
+│                   │  2-min averages  │                        │  channel       │
 │                   │  in RAM          │                        └───────┬────────┘
-│                   ▼                  │                                │ read API key
+│                   ▼                  │                                │ HTTPS (Scrape)
 │  phones/laptops ◀── http://tempmon.local/                     ┌───────▼────────┐
 │  (read-only page + chart)            │                        │ Home Assistant │
 └──────────────────────────────────────┘                        └────────────────┘
@@ -50,7 +50,7 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 | Temperature page `/` and `/history.json` | Public on the site LAN, read-only. There are no settings reachable over the network. |
 | WiFi settings | Only via the fallback hotspot *Tempmon Setup*, which is WPA2-protected (`tempmon_ap_password`). |
 | Firmware updates (OTA) | Password-protected (`tempmon_ota_password`), and only from the same LAN. |
-| Long-term data | Private ThingSpeak channel; readers need the channel's *Read API Key*. |
+| Long-term data | ThingSpeak channel: **public** (anyone with the channel ID can read it) or **private** (readers need the *Read API Key*). Writing always needs the *Write API Key*. |
 
 ## Hardware
 
@@ -79,9 +79,10 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 
 1. Create a free MathWorks account at <https://thingspeak.mathworks.com>.
 2. *Channels → New Channel*. Name it, set **Field 1 = `Temperature`** and **Field 2 = `RSSI`**, then save.
-   New channels are private by default.
+   New channels are private by default. To share the data (charts on ThingSpeak, keyless API
+   reads), go to *Sharing → Share channel view with everyone*.
 3. On the *API Keys* tab, note the **Write API Key** (used by the board) and the
-   **Read API Key** (used by Home Assistant), plus the **Channel ID**.
+   **Read API Key** (for Home Assistant, only if the channel stays private), plus the **Channel ID**.
 
 The free tier allows 3 million messages a year (~8 200/day). This sends 720 a day.
 
@@ -161,19 +162,38 @@ with `http://<that-ip>/` on the enclosure.
 
 ## Home Assistant
 
-Home Assistant can't reach the board directly, so it reads from ThingSpeak instead. With the
-**Scrape** integration (UI only, no YAML):
+Home Assistant can't reach the board directly, so it reads from ThingSpeak instead. The
+**Scrape** integration does this entirely in the UI, with no YAML.
 
-1. *Settings → Devices & services → Add integration → Scrape*
-2. Resource: `https://api.thingspeak.com/channels/<CHANNEL_ID>/fields/1/last.xml?api_key=<READ_API_KEY>`
-3. Sensor: select `field1`, unit `°C`, device class *Temperature*, state class *Measurement*
-4. Set the scan interval to 120 s.
+**1. Add the integration:** *Settings → Devices & services → Add integration → Scrape*.
+For the resource, use:
 
-Other options:
-- A REST sensor on `.../fields/1/last.json`
-- The plain-text endpoint `.../fields/1/last.txt`
+```
+https://api.thingspeak.com/channels/<CHANNEL_ID>/feeds.xml?results=1
+```
 
-Then use a *History graph* or *Statistics graph* card for charts.
+- **Public channel:** no API key is needed.
+- **Private channel:** append `&api_key=<READ_API_KEY>`.
+
+Scrape reads XML/HTML, not JSON, so use `feeds.xml`, not `feeds.json`.
+
+**2. Add one sensor per value:** use the integration's *Add entity* button:
+
+| Name | Select | Device class | State class | Unit |
+|---|---|---|---|---|
+| Tempmon temperature | `feed field1` | Temperature | Measurement | °C |
+| Tempmon WiFi signal | `feed field2` | Signal strength | Measurement | dBm |
+| Tempmon last measurement | `feed created-at` | Timestamp | – | – |
+
+**3. Refresh rate:** Scrape polls every 10 minutes by default. HA stores the newest point at
+each poll; it can't import the 2-minute points in between. Requesting more `results` doesn't
+help, since only one value per sensor is used. The full-resolution data stays in ThingSpeak and
+on the board's own page.
+
+**4. Charts:** add a *History graph*, *Statistics graph* or tile *trend graph* card.
+`Tempmon last measurement` is useful for an alert when the board stops reporting.
+
+**Alternative with YAML access:** a `rest` sensor on `.../fields/1/last.json`.
 
 ## Local endpoints
 
