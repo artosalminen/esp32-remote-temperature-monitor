@@ -248,7 +248,7 @@ svg text{fill:var(--mut);font-size:11px}
 <div class="stats" id="stats"></div>
 <div class="tabs"><button data-h="24" class="on">24 h</button><button data-h="72">3 days</button><button data-h="168">7 days</button><button data-h="336">14 days</button></div>
 <svg id="c" viewBox="0 0 700 260" preserveAspectRatio="none"></svg>
-<div class="mut" style="margin-top:8px">2-min averages kept on the device for 14 days; history resets if it loses power.</div>
+<div class="mut" style="margin-top:8px">2-min averages kept on the device for 14 days; after a power cut, older history is reloaded from the cloud.</div>
 </main><script>
 let D=null,H=24;
 const f=x=>x==null?'–':x.toFixed(1)+' °C';
