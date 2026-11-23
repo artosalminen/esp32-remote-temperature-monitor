@@ -1,6 +1,6 @@
 # esp32-remote-temperature-monitor
 
-A temperature monitor for a remote site (cabin, club house, shared space…) built on an
+A temperature monitor for a remote site (cabin, garage, shared space…) built on an
 ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 
 - **Anyone on the site's WiFi** opens `http://tempmon.local/` and sees the current
@@ -10,20 +10,14 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 - **No inbound access needed** at the site: no port forwarding, DDNS, VPN or local server.
   The board only makes outgoing HTTPS requests.
 
+![The board's own page: current temperature, min/max/average and a chart](docs/images/local-page.png)
+
+Write-up with background and design notes:
+[How to build a remote temperature monitor with ESP32](https://slmnn.fi/posts/how-to-build-a-remote-temperature-monitor-with-esp32/)
+
 ## How it works
 
-```
-                remote site                                 internet / home
-┌──────────────────────────────────────┐
-│ DS18S20 ─1-Wire─ ESP32 (ESPHome)     │  HTTPS, every 2 min    ┌────────────────┐
-│                   │  14 days of      │ ─────────────────────▶ │  ThingSpeak    │
-│                   │  2-min averages  │                        │  channel       │
-│                   │  in RAM          │                        └───────┬────────┘
-│                   ▼                  │                                │ HTTPS (Scrape)
-│  phones/laptops ◀── http://tempmon.local/                     ┌───────▼────────┐
-│  (read-only page + chart)            │                        │ Home Assistant │
-└──────────────────────────────────────┘                        └────────────────┘
-```
+![Data flow: the sensor feeds the ESP32 at the site, which serves a read-only page to phones on the site WiFi and sends HTTPS uploads to ThingSpeak. Home Assistant at home polls ThingSpeak and sends Telegram alerts. Nothing connects into the site](docs/images/architecture.svg)
 
 - The sensor is read every 30 s; four readings are averaged into one point every 2 minutes.
 - Each point goes into a 10 080-slot ring buffer in RAM (14 days, 20 KB) that the local web
@@ -34,6 +28,8 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
   24-hour chart.
 
 ### Time and outages
+
+![Upload queue: points measured while the internet is down are queued in RAM and sent in bulk with their original timestamps when the connection returns, so ThingSpeak has no gap](docs/images/upload-queue.svg)
 
 - The board syncs its clock over SNTP (`pool.ntp.org`). Every point is stamped with its
   **measurement time** in UTC; the web page shows it in the viewer's local time.
@@ -79,6 +75,8 @@ from ThingSpeak:
 - USB power supply
 
 ### Wiring
+
+![Wiring: 3V3 to VDD, GND to GND, GPIO13 to DQ, and a 4.7 kΩ pull-up between DQ and VDD. GPIO12 is marked as a strapping pin to avoid](docs/images/wiring.svg)
 
 | DS18x20 | ESP32 |
 |---|---|
@@ -237,6 +235,7 @@ on the board's own page.
 | `tempmon.yaml` | ESPHome device configuration |
 | `tempmon_web.h` | Ring buffer, public web page and JSON endpoint (C++ include) |
 | `secrets.example.yaml` | Template for `secrets.yaml` |
+| `docs/images/` | Diagrams and screenshot used in this README |
 
 ## License
 

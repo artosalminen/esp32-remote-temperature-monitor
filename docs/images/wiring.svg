@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 300" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="14">
+  <title>Wiring: DS18S20 to ESP32 GPIO13 with a 4.7 kΩ pull-up</title>
+  <rect width="700" height="300" rx="12" fill="#ffffff"/>
+
+  <!-- ESP32 -->
+  <rect x="40" y="30" width="170" height="245" rx="10" fill="#1e293b"/>
+  <text x="125" y="58" text-anchor="middle" fill="#f8fafc" font-weight="600">ESP32-WROOM</text>
+  <g font-size="13" fill="#e2e8f0" text-anchor="end">
+    <text x="196" y="90">3V3</text>
+    <text x="196" y="125" fill="#94a3b8">⋮</text>
+    <text x="196" y="155">GPIO14</text>
+    <text x="196" y="185" fill="#f87171">GPIO12</text>
+    <text x="196" y="215">GND</text>
+    <text x="196" y="245">GPIO13</text>
+  </g>
+  <g fill="#cbd5e1">
+    <rect x="206" y="80" width="10" height="10"/>
+    <rect x="206" y="145" width="10" height="10"/>
+    <rect x="206" y="175" width="10" height="10" fill="#f87171"/>
+    <rect x="206" y="205" width="10" height="10"/>
+    <rect x="206" y="235" width="10" height="10"/>
+  </g>
+  <text x="226" y="184" font-size="12" fill="#dc2626">✕ strapping pin, avoid</text>
+
+  <!-- 3V3 → VDD -->
+  <path d="M216 85 H400 V120 H520" fill="none" stroke="#dc2626" stroke-width="3"/>
+  <!-- GPIO13 → DQ -->
+  <path d="M216 240 H440 V160 H520" fill="none" stroke="#d97706" stroke-width="3"/>
+  <!-- GND → GND, hopping over the data wire at x=440 -->
+  <path d="M216 210 H432 A8 8 0 0 1 448 210 H500 V200 H520" fill="none" stroke="#111827" stroke-width="3"/>
+
+  <!-- Pull-up resistor between VDD and DQ -->
+  <circle cx="480" cy="120" r="4" fill="#dc2626"/>
+  <circle cx="480" cy="160" r="4" fill="#d97706"/>
+  <rect x="472" y="127" width="16" height="26" rx="3" fill="#fde68a" stroke="#92400e" stroke-width="1.5"/>
+  <text x="460" y="145" text-anchor="end" font-size="12" fill="#92400e">4.7 kΩ</text>
+
+  <!-- DS18S20 -->
+  <rect x="520" y="90" width="130" height="140" rx="10" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="600" y="78" text-anchor="middle" font-weight="600" fill="#0c4a6e">DS18S20</text>
+  <g font-size="13" fill="#0c4a6e">
+    <text x="534" y="125">VDD</text>
+    <text x="534" y="165">DQ (data)</text>
+    <text x="534" y="205">GND</text>
+  </g>
+
+  <g font-size="12" fill="#475569">
+    <line x1="40" y1="292" x2="60" y2="292" stroke="#dc2626" stroke-width="3"/><text x="66" y="296">3.3 V</text>
+    <line x1="120" y1="292" x2="140" y2="292" stroke="#d97706" stroke-width="3"/><text x="146" y="296">data</text>
+    <line x1="196" y1="292" x2="216" y2="292" stroke="#111827" stroke-width="3"/><text x="222" y="296">ground</text>
+  </g>
+</svg>
