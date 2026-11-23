@@ -1,12 +1,16 @@
 // Tempmon public read-only web page + 14-day in-RAM history (2-min averages).
 //   GET /              -> HTML page (current temperature + chart)
-//   GET /history.json  -> {"now":21.37,"age":42,"step":120,"heap":N,"v":[...]}
-//                         (v = °C*100, oldest first, null = gap; heap = free bytes, diagnostics)
+//   GET /history.json  -> {"now":21.37,"t":1795000000,"age":42,"step":120,"unsent":0,"heap":N,"v":[...]}
+//                         (v = °C*100, oldest first, null = gap; t = UTC epoch of newest point,
+//                          0 if the clock isn't synced yet; unsent = points waiting for upload)
 // Only serves while the board is connected to WiFi as a client, so it never
 // shadows the captive portal in fallback-hotspot mode. History is lost on reboot.
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <ctime>
+#include <string>
 #include <esp_http_server.h>
 #include <esp_system.h>
 #include "esphome/core/hal.h"
@@ -22,11 +26,16 @@ static constexpr int STEP_S = 120;                      // one point per 2 min (
 static constexpr int HIST_N = 14 * 24 * 3600 / STEP_S;  // 14 days = 10080 points = 20 KB
 static constexpr int16_t GAP = INT16_MIN;
 
+static constexpr int UPLOAD_BATCH = 100;  // points per ThingSpeak bulk update (~7 KB JSON)
+
 struct History {
   int16_t v[HIST_N];
-  int head{0};       // next write position
-  int count{0};      // stored samples
-  uint32_t last_ms{0};
+  int head{0};          // next write position
+  int count{0};         // stored samples
+  uint32_t last_ms{0};  // millis() of newest point
+  uint32_t last_epoch{0};  // UTC epoch of newest point (0 = clock never synced)
+  int unsent{0};        // newest N points not yet accepted by ThingSpeak
+  int inflight{0};      // points in the upload currently being sent
   float sum{0};
   int n{0};
   float current{NAN};
@@ -42,18 +51,66 @@ inline void add_reading(float x) {
   }
 }
 
-// Close the current 5-min window; returns its mean (NAN if no valid readings).
-inline float commit() {
+// Close the current 2-min window. epoch = current UTC time from SNTP, or 0 if not synced.
+// Points are exactly STEP_S apart, so one timestamp on the newest point dates them all.
+inline void commit(uint32_t epoch) {
   float mean = hist.n ? hist.sum / hist.n : NAN;
+  hist.sum = 0;
+  hist.n = 0;
   if (hist.count == 0 && std::isnan(mean))
-    return mean;  // don't start the history with a gap (interval fires right after boot)
+    return;  // don't start the history with a gap (interval fires right after boot)
   hist.v[hist.head] = std::isnan(mean) ? GAP : (int16_t) lroundf(mean * 100.0f);
   hist.head = (hist.head + 1) % HIST_N;
   if (hist.count < HIST_N) hist.count++;
   hist.last_ms = esphome::millis();
-  hist.sum = 0;
-  hist.n = 0;
-  return mean;
+  if (epoch)
+    hist.last_epoch = epoch;
+  else if (hist.last_epoch)
+    hist.last_epoch += STEP_S;  // clock was synced before; keep counting
+  if (hist.unsent < hist.count) hist.unsent++;
+}
+
+// Build a ThingSpeak bulk_update body with the oldest pending points (up to UPLOAD_BATCH),
+// each stamped with its measurement time. Returns "" if there is nothing to send yet.
+// The newest point also carries the current WiFi RSSI as field2.
+inline std::string build_upload(const char *write_key, float rssi) {
+  hist.inflight = 0;
+  if (hist.unsent == 0 || hist.last_epoch == 0)
+    return "";  // nothing pending, or no clock yet (timestamps unknown)
+  int n = std::min(hist.unsent, UPLOAD_BATCH);
+  std::string body = "{\"write_api_key\":\"";
+  body += write_key;
+  body += "\",\"updates\":[";
+  bool any = false;
+  char item[96], ts[24];
+  for (int k = hist.unsent - 1; k >= hist.unsent - n; k--) {  // k = age in steps, oldest first
+    int16_t v = hist.v[(hist.head - 1 - k + HIST_N) % HIST_N];
+    if (v == GAP) continue;
+    time_t t = hist.last_epoch - (uint32_t) k * STEP_S;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    int len = snprintf(item, sizeof(item), "%s{\"created_at\":\"%s\",\"field1\":\"%.2f\"", any ? "," : "", ts,
+                       v / 100.0f);
+    if (k == 0 && !std::isnan(rssi))
+      len += snprintf(item + len, sizeof(item) - len, ",\"field2\":\"%.0f\"", rssi);
+    snprintf(item + len, sizeof(item) - len, "}");
+    body += item;
+    any = true;
+  }
+  body += "]}";
+  if (!any) {  // batch was all gaps: nothing to send, just skip past them
+    hist.unsent -= n;
+    return "";
+  }
+  hist.inflight = n;
+  return body;
+}
+
+// ThingSpeak accepted the last upload.
+inline void upload_ack() {
+  hist.unsent = std::max(0, hist.unsent - hist.inflight);
+  hist.inflight = 0;
 }
 
 static const char PAGE_HTML[] = R"HTML(<!doctype html>
@@ -84,7 +141,7 @@ svg text{fill:var(--mut);font-size:11px}
 </main><script>
 let D=null,H=24;
 const f=x=>x==null?'–':x.toFixed(1)+' °C';
-function draw(){if(!D)return;const end=Date.now()-D.age*1000,n=D.v.length,
+function draw(){if(!D)return;const end=D.t?D.t*1000:Date.now()-D.age*1000,n=D.v.length,
 pts=D.v.map((v,i)=>[end-(n-1-i)*D.step*1000,v==null?null:v/100]),from=Date.now()-H*3600e3,
 p=pts.filter(q=>q[0]>=from),vals=p.filter(q=>q[1]!=null).map(q=>q[1]);
 const s=document.getElementById('stats');
@@ -102,7 +159,8 @@ let path='',pen=false;for(const[t,v]of p){if(v==null){pen=false;continue}path+=(
 svg.innerHTML=g+`<path d="${path}" fill="none" stroke="var(--acc)" stroke-width="2" vector-effect="non-scaling-stroke"/>`}
 async function load(){try{D=await (await fetch('history.json',{cache:'no-store'})).json();
 document.getElementById('now').textContent=f(D.now);
-document.getElementById('upd').textContent='Updated '+new Date().toLocaleTimeString();draw()}catch(e){document.getElementById('upd').textContent='Connection lost — retrying…'}}
+const last=D.v.length?(D.t?new Date(D.t*1000):new Date(Date.now()-D.age*1000)):null;
+document.getElementById('upd').textContent=last?'Last 2-min average '+last.toLocaleString([], {dateStyle:'short',timeStyle:'short'}):'Waiting for first reading…';draw()}catch(e){document.getElementById('upd').textContent='Connection lost — retrying…'}}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{H=+b.dataset.h;document.querySelectorAll('.tabs button').forEach(z=>z.classList.toggle('on',z===b));draw()});
 load();setInterval(load,60000);
 </script></body></html>)HTML";
@@ -135,8 +193,9 @@ class PublicPage : public AsyncWebHandler {
       len = snprintf(buf, sizeof(buf), "{\"now\":null");
     else
       len = snprintf(buf, sizeof(buf), "{\"now\":%.2f", hist.current);
-    len += snprintf(buf + len, sizeof(buf) - len, ",\"age\":%u,\"step\":%d,\"heap\":%u,\"v\":[", (unsigned) age,
-                    STEP_S, (unsigned) esp_get_free_heap_size());
+    len += snprintf(buf + len, sizeof(buf) - len, ",\"t\":%u,\"age\":%u,\"step\":%d,\"unsent\":%d,\"heap\":%u,\"v\":[",
+                    (unsigned) hist.last_epoch, (unsigned) age, STEP_S, hist.unsent,
+                    (unsigned) esp_get_free_heap_size());
     int count = hist.count, start = (hist.head - count + HIST_N) % HIST_N;
     for (int i = 0; i < count; i++) {
       int16_t v = hist.v[(start + i) % HIST_N];

@@ -30,6 +30,19 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
   page charts, and is sent to ThingSpeak (field 1 = °C, field 2 = WiFi RSSI in dBm).
 - The local history is lost on power loss/reboot; ThingSpeak keeps everything.
 
+### Time and outages
+
+- The board syncs its clock over SNTP (`pool.ntp.org`). Every point is stamped with its
+  **measurement time** in UTC; the web page shows it in the viewer's local time.
+- Uploads use ThingSpeak's
+  [bulk-update API](https://www.mathworks.com/help/thingspeak/bulkwritejsondata.html) with
+  `created_at`, so ThingSpeak and Home Assistant get the time it was measured, not the time it arrived.
+- If the internet or ThingSpeak is down, points stay queued in RAM. When the connection is back
+  they go out in batches of 100 every 20 s, still with their original timestamps. Up to the full
+  14 days can be caught up, as long as the board isn't rebooted in between.
+- Before the first time sync, points are kept but not uploaded. They are dated and sent once
+  the clock is set.
+
 ### Security model
 
 | Thing | Protection |
@@ -70,7 +83,7 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 3. On the *API Keys* tab, note the **Write API Key** (used by the board) and the
    **Read API Key** (used by Home Assistant), plus the **Channel ID**.
 
-The free tier allows ~8 200 messages/day; this sends 720.
+The free tier allows 3 million messages a year (~8 200/day). This sends 720 a day.
 
 ### 2. Install ESPHome
 
@@ -99,6 +112,7 @@ Fill in `secrets.yaml`:
 | `tempmon_ap_password` | Password of the fallback setup hotspot (≥ 8 characters) |
 | `tempmon_ota_password` | Password for over-the-air updates |
 | `thingspeak_write_key` | ThingSpeak *Write API Key* |
+| `thingspeak_channel_id` | ThingSpeak channel ID (the number in the channel URL) |
 
 `secrets.yaml` is git-ignored. Never commit it.
 
@@ -126,7 +140,7 @@ Watch the log (`esphome logs tempmon.yaml`) for:
 
 - `'Temperature': Got Temperature=23.3°C`: the sensor works
 - `IP Address: 192.168.x.y`: WiFi works
-- `ThingSpeak: HTTP 200` every 2 min: data is arriving (check the channel's *Private View*)
+- `ThingSpeak: uploaded 1 point(s)` every 2 min: data is arriving (check the channel's *Private View*)
 
 Then open `http://tempmon.local/` (or the IP). The chart fills in as 2-minute points arrive.
 
@@ -166,7 +180,7 @@ Then use a *History graph* or *Statistics graph* card for charts.
 | Path | Returns |
 |---|---|
 | `/` | The HTML page (works offline, no external scripts) |
-| `/history.json` | `{"now":23.06,"age":42,"step":120,"heap":170908,"v":[2306,2304,null,…]}`. `v` holds 2-min averages in °C × 100, oldest first, `null` = no reading. `age` is seconds since the last point. `heap` is free memory in bytes (diagnostics). |
+| `/history.json` | `{"now":22.75,"t":1795456465,"age":42,"step":120,"unsent":0,"heap":169104,"v":[2288,2280,null,…]}`. `v` holds 2-min averages in °C × 100, oldest first, `null` = no reading. `t` is the UTC epoch of the newest point (`0` before the first time sync). `age` is seconds since that point. `unsent` is the number of points waiting for upload. `heap` is free memory in bytes (diagnostics). |
 
 ## Customising
 

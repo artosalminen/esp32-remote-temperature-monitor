@@ -6,7 +6,9 @@
 #   current temperature + 24 h / 3 d / 7 d / 14 d chart of 2-min averages kept in RAM.
 #   Read-only: the device has no settings reachable over the network.
 # Long-term history: every 2-min average is pushed to a private ThingSpeak channel
-#   (field1 = °C, field2 = WiFi RSSI); e.g. Home Assistant can read it from there.
+#   (field1 = °C, field2 = WiFi RSSI), stamped with its measurement time (SNTP).
+#   Points not yet uploaded (internet outage) are kept and sent later.
+#   e.g. Home Assistant can read it from there.
 #
 # WiFi: knows two networks (remote site + home) and joins whichever it finds.
 # Anywhere else: if neither network is found for 1 min, the board
@@ -16,6 +18,7 @@
 
 substitutions:
   ts_key: !secret thingspeak_write_key
+  ts_channel: !secret thingspeak_channel_id
 
 esphome:
   name: tempmon
@@ -74,26 +77,47 @@ sensor:
     on_value:
       - lambda: 'tempmon::add_reading(x);'
 
+time:
+  - platform: sntp          # default servers: 0/1/2.pool.ntp.org
+    id: sntp_time
+    timezone: Europe/Helsinki   # only affects log output; data is stored/sent in UTC
+
 interval:
+  # Close a 2-min averaging window and timestamp it.
   - interval: 2min   # must match STEP_S in tempmon_web.h
     then:
-      - lambda: 'id(avg5) = tempmon::commit();'
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          tempmon::commit(now.is_valid() ? (uint32_t) now.timestamp : 0);
+
+  # Upload pending points with their measurement times. Normally that's one point per
+  # 2 min; after an internet outage the backlog goes out in batches of 100 every 20 s
+  # (ThingSpeak's bulk-update API wants >= 15 s between calls).
+  - interval: 20s
+    then:
       - if:
           condition:
-            lambda: 'return !std::isnan(id(avg5)) && wifi::global_wifi_component->is_connected();'
+            lambda: |-
+              if (!wifi::global_wifi_component->is_connected()) return false;
+              id(ts_body) = tempmon::build_upload("${ts_key}", id(rssi).state);
+              return !id(ts_body).empty();
           then:
-            - http_request.get:
-                url: !lambda |-
-                  return str_sprintf(
-                    "https://api.thingspeak.com/update?api_key=%s&field1=%.2f&field2=%.0f",
-                    "${ts_key}", id(avg5), id(rssi).state);
+            - http_request.post:
+                url: "https://api.thingspeak.com/channels/${ts_channel}/bulk_update.json"
+                request_headers:
+                  Content-Type: application/json
+                body: !lambda 'return id(ts_body);'
                 on_response:
                   then:
-                    - logger.log:
-                        format: "ThingSpeak: HTTP %d"
-                        args: ["response->status_code"]
+                    - lambda: |-
+                        if (response->status_code == 202) {
+                          ESP_LOGD("tempmon", "ThingSpeak: uploaded %d point(s)", tempmon::hist.inflight);
+                          tempmon::upload_ack();
+                        } else {
+                          ESP_LOGW("tempmon", "ThingSpeak: HTTP %d, will retry", response->status_code);
+                        }
+            - lambda: 'id(ts_body).clear();'
 
 globals:
-  - id: avg5
-    type: float
-    initial_value: 'NAN'
+  - id: ts_body
+    type: std::string
