@@ -28,7 +28,10 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 - The sensor is read every 30 s; four readings are averaged into one point every 2 minutes.
 - Each point goes into a 10 080-slot ring buffer in RAM (14 days, 20 KB) that the local web
   page charts, and is sent to ThingSpeak (field 1 = °C, field 2 = WiFi RSSI in dBm).
-- The local history is lost on power loss/reboot; ThingSpeak keeps everything.
+- After a power loss or reboot, the local history is loaded back from ThingSpeak, which keeps
+  everything.
+- The chart zooms to the data it has, so a freshly restarted board doesn't show a nearly empty
+  24-hour chart.
 
 ### Time and outages
 
@@ -42,6 +45,22 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
   14 days can be caught up, as long as the board isn't rebooted in between.
 - Before the first time sync, points are kept but not uploaded. They are dated and sent once
   the clock is set.
+
+### Restoring history after a reboot
+
+A reboot or power cut empties the RAM buffer, so the board loads its older history back
+from ThingSpeak:
+
+- It starts once the clock is synced and the first new point exists.
+- It fetches `fields/1.csv` in **6-hour windows, newest first**, one request every 10 s
+  (~6 KB each), until the 14-day buffer is covered. That takes about 9 minutes.
+- Restored points only go into empty slots and never overwrite what the board measured
+  itself. The minutes the board was actually off stay as a gap.
+- It never blocks anything. The page, measurements and uploads work normally meanwhile, and
+  the chart fills in as windows arrive. A failed request is retried 3 times and then that
+  window is skipped.
+- For a **private** channel, set `ts_read_key` in `tempmon.yaml`'s `substitutions`. A public
+  channel needs no key.
 
 ### Security model
 
@@ -200,7 +219,7 @@ on the board's own page.
 | Path | Returns |
 |---|---|
 | `/` | The HTML page (works offline, no external scripts) |
-| `/history.json` | `{"now":22.75,"t":1795456465,"age":42,"step":120,"unsent":0,"heap":169104,"v":[2288,2280,null,…]}`. `v` holds 2-min averages in °C × 100, oldest first, `null` = no reading. `t` is the UTC epoch of the newest point (`0` before the first time sync). `age` is seconds since that point. `unsent` is the number of points waiting for upload. `heap` is free memory in bytes (diagnostics). |
+| `/history.json` | `{"now":22.75,"t":1795456465,"age":42,"step":120,"unsent":0,"restore":2,"restored":512,"heap":169104,"v":[2288,2280,null,…]}`. `v` holds 2-min averages in °C × 100, oldest first, `null` = no reading. `t` is the UTC epoch of the newest point (`0` before the first time sync). `age` is seconds since that point. `unsent` is the number of points waiting for upload. `restore` is `0` waiting, `1` loading history from ThingSpeak or `2` done; `restored` is how many points were loaded back. `heap` is free memory in bytes (diagnostics). |
 
 ## Customising
 

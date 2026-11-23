@@ -2,7 +2,9 @@
 //   GET /              -> HTML page (current temperature + chart)
 //   GET /history.json  -> {"now":21.37,"t":1795000000,"age":42,"step":120,"unsent":0,"heap":N,"v":[...]}
 //                         (v = °C*100, oldest first, null = gap; t = UTC epoch of newest point,
-//                          0 if the clock isn't synced yet; unsent = points waiting for upload)
+//                          0 if the clock isn't synced yet; unsent = points waiting for upload;
+//                          restore = 0 waiting / 1 loading older history from ThingSpeak / 2 done,
+//                          restored = points loaded back)
 // Only serves while the board is connected to WiFi as a client, so it never
 // shadows the captive portal in fallback-hotspot mode. History is lost on reboot.
 #pragma once
@@ -113,6 +115,115 @@ inline void upload_ack() {
   hist.inflight = 0;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Restore after reboot: refill older history from ThingSpeak, newest first, in 6-hour windows.
+// Runs in the background once the clock is synced and the first point exists. A failed window is
+// retried up to RESTORE_TRIES times and then skipped; nothing else waits for it.
+// ---------------------------------------------------------------------------------------------
+static constexpr uint32_t RESTORE_WINDOW_S = 6 * 3600;  // ~180 rows, ~6 KB of CSV
+static constexpr int RESTORE_TRIES = 3;
+
+enum RestoreState : uint8_t { RESTORE_WAITING = 0, RESTORE_RUNNING = 1, RESTORE_DONE = 2 };
+struct Restore {
+  RestoreState state{RESTORE_WAITING};
+  uint32_t cursor{0};  // UTC end of the next window to fetch (moves back in time)
+  uint32_t stop{0};    // oldest time that still fits in the ring buffer
+  int fails{0};
+  int restored{0};     // points filled in so far
+};
+inline Restore rst;
+
+// Days since 1970-01-01 for a civil date (UTC), so we don't depend on the TZ setting.
+inline int64_t days_from_civil(int y, unsigned m, unsigned d) {
+  y -= m <= 2;
+  const int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned) (y - era * 400);
+  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + (int64_t) doe - 719468;
+}
+
+// Put one restored reading into the slot for its time. Only fills empty slots or extends the
+// history backwards; never overwrites a point the board measured itself.
+inline void restore_point(uint32_t t, float value) {
+  if (hist.last_epoch == 0 || t > hist.last_epoch) return;
+  long k = lroundf((float) (hist.last_epoch - t) / STEP_S);  // age in steps from the newest point
+  if (k < 0 || k >= HIST_N) return;
+  int16_t v = (int16_t) lroundf(value * 100.0f);
+  auto slot = [](long age) { return (hist.head - 1 - age + 2 * HIST_N) % HIST_N; };
+  if (k < hist.count) {
+    if (hist.v[slot(k)] == GAP) { hist.v[slot(k)] = v; rst.restored++; }
+    return;
+  }
+  for (long j = hist.count; j < k; j++) hist.v[slot(j)] = GAP;  // unknown in between
+  hist.v[slot(k)] = v;
+  hist.count = k + 1;
+  rst.restored++;
+}
+
+// True when a restore request should be made now. Starts the restore on first call.
+inline bool restore_due() {
+  if (rst.state == RESTORE_DONE) return false;
+  if (rst.state == RESTORE_WAITING) {
+    if (hist.count == 0 || hist.last_epoch == 0) return false;  // need a point and a clock
+    rst.cursor = hist.last_epoch - (uint32_t) (hist.count - 1) * STEP_S;  // oldest point we have
+    rst.stop = hist.last_epoch - (uint32_t) (HIST_N - 1) * STEP_S;
+    rst.state = RESTORE_RUNNING;
+  }
+  if (rst.cursor <= rst.stop) { rst.state = RESTORE_DONE; return false; }
+  return true;
+}
+
+inline std::string restore_url(const char *channel, const char *read_key) {
+  uint32_t start = std::max(rst.stop, rst.cursor > RESTORE_WINDOW_S ? rst.cursor - RESTORE_WINDOW_S : 0u);
+  char a[24], b[24];
+  time_t ts = start, te = rst.cursor;
+  struct tm tm;
+  gmtime_r(&ts, &tm);
+  strftime(a, sizeof(a), "%Y-%m-%d%%20%H:%M:%S", &tm);
+  gmtime_r(&te, &tm);
+  strftime(b, sizeof(b), "%Y-%m-%d%%20%H:%M:%S", &tm);
+  std::string url = "https://api.thingspeak.com/channels/";
+  url += channel;
+  url += "/fields/1.csv?start=";
+  url += a;
+  url += "&end=";
+  url += b;
+  if (read_key && *read_key) {
+    url += "&api_key=";
+    url += read_key;
+  }
+  return url;
+}
+
+inline void restore_advance() {
+  rst.cursor = rst.cursor > RESTORE_WINDOW_S ? rst.cursor - RESTORE_WINDOW_S : 0;
+  rst.fails = 0;
+  if (rst.cursor <= rst.stop) rst.state = RESTORE_DONE;
+}
+
+// Parse a ThingSpeak CSV window ("created_at,entry_id,field1" rows) and move to the next window.
+inline void restore_ok(const std::string &body) {
+  size_t pos = 0;
+  while (pos < body.size()) {
+    size_t eol = body.find('\n', pos);
+    if (eol == std::string::npos) break;  // ignore a truncated last line
+    std::string line = body.substr(pos, eol - pos);
+    pos = eol + 1;
+    int y, mo, d, h, mi, s;
+    float val;
+    if (sscanf(line.c_str(), "%d-%d-%d %d:%d:%d UTC,%*d,%f", &y, &mo, &d, &h, &mi, &s, &val) != 7) continue;
+    uint32_t t = (uint32_t) (days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s);
+    restore_point(t, val);
+  }
+  restore_advance();
+}
+
+// Request failed: retry the same window a few times, then skip it.
+inline void restore_fail() {
+  if (++rst.fails >= RESTORE_TRIES) restore_advance();
+}
+
 static const char PAGE_HTML[] = R"HTML(<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -141,20 +252,23 @@ svg text{fill:var(--mut);font-size:11px}
 </main><script>
 let D=null,H=24;
 const f=x=>x==null?'–':x.toFixed(1)+' °C';
-function draw(){if(!D)return;const end=D.t?D.t*1000:Date.now()-D.age*1000,n=D.v.length,
-pts=D.v.map((v,i)=>[end-(n-1-i)*D.step*1000,v==null?null:v/100]),from=Date.now()-H*3600e3,
-p=pts.filter(q=>q[0]>=from),vals=p.filter(q=>q[1]!=null).map(q=>q[1]);
+function draw(){if(!D)return;const now=Date.now(),end=D.t?D.t*1000:now-D.age*1000,n=D.v.length,
+pts=D.v.map((v,i)=>[end-(n-1-i)*D.step*1000,v==null?null:v/100]),
+p=pts.filter(q=>q[0]>=now-H*3600e3),vals=p.filter(q=>q[1]!=null).map(q=>q[1]);
 const s=document.getElementById('stats');
 s.innerHTML=vals.length?`<div><span class="mut">Min (${H} h)</span><b>${f(Math.min(...vals))}</b></div><div><span class="mut">Max (${H} h)</span><b>${f(Math.max(...vals))}</b></div><div><span class="mut">Average</span><b>${f(vals.reduce((a,b)=>a+b)/vals.length)}</b></div>`:'<span class="mut">No history yet — first point after 2 min.</span>';
 const svg=document.getElementById('c'),W=700,Ht=260,L=40,R=8,T=10,B=24;
 if(!vals.length){svg.innerHTML='';return}
+// Zoom to the data when the history is shorter than the selected range (e.g. after a power cut).
+const from=Math.min(Math.max(now-H*3600e3,p[0][0]),now-600e3);
 let lo=Math.floor(Math.min(...vals)-0.5),hi=Math.ceil(Math.max(...vals)+0.5);
-const x=t=>L+(t-from)/(Date.now()-from)*(W-L-R),y=v=>T+(hi-v)/(hi-lo)*(Ht-T-B);
+const x=t=>L+(t-from)/(now-from)*(W-L-R),y=v=>T+(hi-v)/(hi-lo)*(Ht-T-B);
 let g='',st=Math.max(1,Math.ceil((hi-lo)/5));
 for(let v=lo;v<=hi;v+=st)g+=`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end">${v}°</text>`;
-const dt=H<=24?6*3600e3:24*3600e3;let t0=new Date(from);t0.setMinutes(0,0,0);
-if(dt>6*3600e3)t0.setHours(0);else t0.setHours(Math.ceil(t0.getHours()/6)*6);
-for(let t=+t0;t<Date.now();t+=dt)if(t>=from){const d=new Date(t);g+=`<line x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${Ht-B}" stroke="var(--line)"/><text x="${x(t)}" y="${Ht-6}" text-anchor="middle">${H<=24?d.getHours()+':00':d.getDate()+'.'+(d.getMonth()+1)+'.'}</text>`}
+// Time grid: the smallest step (10 min … 2 days) that gives at most 6 lines, aligned to local time.
+const DT=[6e5,18e5,36e5,108e5,216e5,432e5,864e5,1728e5],dt=DT.find(d=>(now-from)/d<=6)||DT[7],o=new Date().getTimezoneOffset()*6e4;
+for(let t=Math.ceil((from-o)/dt)*dt+o;t<now;t+=dt){const d=new Date(t),lab=dt<864e5?d.getHours()+':'+String(d.getMinutes()).padStart(2,'0'):d.getDate()+'.'+(d.getMonth()+1)+'.';
+g+=`<line x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${Ht-B}" stroke="var(--line)"/><text x="${x(t)}" y="${Ht-6}" text-anchor="middle">${lab}</text>`}
 let path='',pen=false;for(const[t,v]of p){if(v==null){pen=false;continue}path+=(pen?'L':'M')+x(t).toFixed(1)+' '+y(v).toFixed(1);pen=true}
 svg.innerHTML=g+`<path d="${path}" fill="none" stroke="var(--acc)" stroke-width="2" vector-effect="non-scaling-stroke"/>`}
 async function load(){try{D=await (await fetch('history.json',{cache:'no-store'})).json();
@@ -193,8 +307,9 @@ class PublicPage : public AsyncWebHandler {
       len = snprintf(buf, sizeof(buf), "{\"now\":null");
     else
       len = snprintf(buf, sizeof(buf), "{\"now\":%.2f", hist.current);
-    len += snprintf(buf + len, sizeof(buf) - len, ",\"t\":%u,\"age\":%u,\"step\":%d,\"unsent\":%d,\"heap\":%u,\"v\":[",
-                    (unsigned) hist.last_epoch, (unsigned) age, STEP_S, hist.unsent,
+    len += snprintf(buf + len, sizeof(buf) - len,
+                    ",\"t\":%u,\"age\":%u,\"step\":%d,\"unsent\":%d,\"restore\":%d,\"restored\":%d,\"heap\":%u,\"v\":[",
+                    (unsigned) hist.last_epoch, (unsigned) age, STEP_S, hist.unsent, (int) rst.state, rst.restored,
                     (unsigned) esp_get_free_heap_size());
     int count = hist.count, start = (hist.head - count + HIST_N) % HIST_N;
     for (int i = 0; i < count; i++) {

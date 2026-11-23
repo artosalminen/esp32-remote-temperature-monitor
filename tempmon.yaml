@@ -19,6 +19,8 @@
 substitutions:
   ts_key: !secret thingspeak_write_key
   ts_channel: !secret thingspeak_channel_id
+  # Read API key, only needed to restore history from a PRIVATE channel ("" for a public one).
+  ts_read_key: ""
 
 esphome:
   name: tempmon
@@ -117,6 +119,35 @@ interval:
                           ESP_LOGW("tempmon", "ThingSpeak: HTTP %d, will retry", response->status_code);
                         }
             - lambda: 'id(ts_body).clear();'
+
+  # After a reboot, load older history back from ThingSpeak: one 6-hour window per 10 s, newest
+  # first, until the 14-day buffer is covered. Failures are retried 3x and then skipped; the page,
+  # measurements and uploads work normally meanwhile. ThingSpeak keeps everything regardless.
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            lambda: 'return wifi::global_wifi_component->is_connected() && tempmon::restore_due();'
+          then:
+            - http_request.get:
+                url: !lambda 'return tempmon::restore_url("${ts_channel}", "${ts_read_key}");'
+                capture_response: true
+                max_response_buffer_size: 12288
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          tempmon::restore_ok(body);
+                          ESP_LOGD("tempmon", "Restore: %d point(s) loaded so far", tempmon::rst.restored);
+                        } else {
+                          ESP_LOGW("tempmon", "Restore: HTTP %d, will retry", response->status_code);
+                          tempmon::restore_fail();
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        ESP_LOGW("tempmon", "Restore: request failed, will retry");
+                        tempmon::restore_fail();
 
 globals:
   - id: ts_body
