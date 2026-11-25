@@ -29,6 +29,9 @@ static constexpr int HIST_N = 14 * 24 * 3600 / STEP_S;  // 14 days = 10080 point
 static constexpr int16_t GAP = INT16_MIN;
 
 static constexpr int UPLOAD_BATCH = 100;  // points per ThingSpeak bulk update (~7 KB JSON)
+// ESPHome's http_request is asynchronous: an action returns before the reply arrives. Only one
+// request of each kind may be in flight; a reply that never comes frees the slot after this long.
+static constexpr uint32_t REQUEST_STALE_MS = 120000;
 
 struct History {
   int16_t v[HIST_N];
@@ -37,7 +40,8 @@ struct History {
   uint32_t last_ms{0};  // millis() of newest point
   uint32_t last_epoch{0};  // UTC epoch of newest point (0 = clock never synced)
   int unsent{0};        // newest N points not yet accepted by ThingSpeak
-  int inflight{0};      // points in the upload currently being sent
+  int inflight{0};      // points in the upload currently being sent (0 = no upload in flight)
+  uint32_t inflight_since{0};
   float sum{0};
   int n{0};
   float current{NAN};
@@ -76,7 +80,11 @@ inline void commit(uint32_t epoch) {
 // each stamped with its measurement time. Returns "" if there is nothing to send yet.
 // The newest point also carries the current WiFi RSSI as field2.
 inline std::string build_upload(const char *write_key, float rssi) {
-  hist.inflight = 0;
+  if (hist.inflight) {
+    if (esphome::millis() - hist.inflight_since < REQUEST_STALE_MS)
+      return "";  // previous upload still in flight: don't send the same points twice
+    hist.inflight = 0;  // no reply ever came; resend
+  }
   if (hist.unsent == 0 || hist.last_epoch == 0)
     return "";  // nothing pending, or no clock yet (timestamps unknown)
   int n = std::min(hist.unsent, UPLOAD_BATCH);
@@ -106,6 +114,7 @@ inline std::string build_upload(const char *write_key, float rssi) {
     return "";
   }
   hist.inflight = n;
+  hist.inflight_since = esphome::millis();
   return body;
 }
 
@@ -115,21 +124,30 @@ inline void upload_ack() {
   hist.inflight = 0;
 }
 
+// Upload failed: keep the points queued for the next attempt.
+inline void upload_fail() { hist.inflight = 0; }
+
 // ---------------------------------------------------------------------------------------------
 // Restore after reboot: refill older history from ThingSpeak, newest first, in 6-hour windows.
 // Runs in the background once the clock is synced and the first point exists. A failed window is
 // retried up to RESTORE_TRIES times and then skipped; nothing else waits for it.
 // ---------------------------------------------------------------------------------------------
 static constexpr uint32_t RESTORE_WINDOW_S = 6 * 3600;  // ~180 rows, ~6 KB of CSV
-static constexpr int RESTORE_TRIES = 3;
+// A failing window is retried with backoff (20 s, 40 s, … capped at 5 min). It is skipped only after
+// this many failures in a row (~40 min), so a temporary error never leaves a hole in the history.
+static constexpr int RESTORE_TRIES = 12;
+static constexpr uint32_t RESTORE_BACKOFF_MAX_MS = 300000;
 
 enum RestoreState : uint8_t { RESTORE_WAITING = 0, RESTORE_RUNNING = 1, RESTORE_DONE = 2 };
 struct Restore {
   RestoreState state{RESTORE_WAITING};
   uint32_t cursor{0};  // UTC end of the next window to fetch (moves back in time)
   uint32_t stop{0};    // oldest time that still fits in the ring buffer
-  int fails{0};
+  int fails{0};        // consecutive failures of the current window
   int restored{0};     // points filled in so far
+  bool busy{false};    // a request is in flight
+  uint32_t busy_since{0};
+  uint32_t retry_at{0};  // millis() before which no new attempt is made (backoff)
 };
 inline Restore rst;
 
@@ -161,9 +179,17 @@ inline void restore_point(uint32_t t, float value) {
   rst.restored++;
 }
 
-// True when a restore request should be made now. Starts the restore on first call.
+// True when a restore request should be made now; the caller must then send exactly one request
+// and report back with restore_ok() / restore_fail(). Starts the restore on first call.
 inline bool restore_due() {
   if (rst.state == RESTORE_DONE) return false;
+  uint32_t now = esphome::millis();
+  if (rst.busy) {
+    if (now - rst.busy_since < REQUEST_STALE_MS) return false;  // one request at a time
+    rst.busy = false;  // no reply ever came: count it as a failure
+    rst.fails++;
+  }
+  if ((int32_t) (now - rst.retry_at) < 0) return false;  // backing off after a failure
   if (rst.state == RESTORE_WAITING) {
     if (hist.count == 0 || hist.last_epoch == 0) return false;  // need a point and a clock
     rst.cursor = hist.last_epoch - (uint32_t) (hist.count - 1) * STEP_S;  // oldest point we have
@@ -171,6 +197,8 @@ inline bool restore_due() {
     rst.state = RESTORE_RUNNING;
   }
   if (rst.cursor <= rst.stop) { rst.state = RESTORE_DONE; return false; }
+  rst.busy = true;
+  rst.busy_since = now;
   return true;
 }
 
@@ -199,11 +227,29 @@ inline std::string restore_url(const char *channel, const char *read_key) {
 inline void restore_advance() {
   rst.cursor = rst.cursor > RESTORE_WINDOW_S ? rst.cursor - RESTORE_WINDOW_S : 0;
   rst.fails = 0;
+  rst.retry_at = 0;
   if (rst.cursor <= rst.stop) rst.state = RESTORE_DONE;
 }
 
+// Request failed: retry the same window with backoff; skip it only after many failures in a row.
+inline void restore_fail() {
+  rst.busy = false;
+  if (++rst.fails >= RESTORE_TRIES) {
+    restore_advance();
+    return;
+  }
+  uint32_t backoff = std::min<uint32_t>(RESTORE_BACKOFF_MAX_MS, 10000u << std::min(rst.fails, 5));
+  rst.retry_at = esphome::millis() + backoff;
+}
+
 // Parse a ThingSpeak CSV window ("created_at,entry_id,field1" rows) and move to the next window.
+// A body without the CSV header (error page, truncated reply) counts as a failure.
 inline void restore_ok(const std::string &body) {
+  rst.busy = false;
+  if (body.rfind("created_at", 0) != 0) {
+    restore_fail();
+    return;
+  }
   size_t pos = 0;
   while (pos < body.size()) {
     size_t eol = body.find('\n', pos);
@@ -217,11 +263,6 @@ inline void restore_ok(const std::string &body) {
     restore_point(t, val);
   }
   restore_advance();
-}
-
-// Request failed: retry the same window a few times, then skip it.
-inline void restore_fail() {
-  if (++rst.fails >= RESTORE_TRIES) restore_advance();
 }
 
 static const char PAGE_HTML[] = R"HTML(<!doctype html>
