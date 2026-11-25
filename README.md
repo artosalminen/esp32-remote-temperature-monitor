@@ -53,8 +53,11 @@ from ThingSpeak:
 - Restored points only go into empty slots and never overwrite what the board measured
   itself. The minutes the board was actually off stay as a gap.
 - It never blocks anything. The page, measurements and uploads work normally meanwhile, and
-  the chart fills in as windows arrive. A failed request is retried 3 times and then that
-  window is skipped.
+  the chart fills in as windows arrive.
+- Only one request is in flight at a time. ESPHome's `http_request` is asynchronous, so a
+  timer could otherwise queue the same window twice. A window is accepted only if its whole
+  body arrived. A failed window is retried with backoff (20 s up to 5 min) and skipped only
+  after 12 failures in a row.
 - For a **private** channel, set `ts_read_key` in `tempmon.yaml`'s `substitutions`. A public
   channel needs no key.
 
