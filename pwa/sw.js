@@ -1,9 +1,9 @@
 // Service worker: offline app shell, background alert checks (Periodic Background Sync,
 // Chromium on Android/desktop when the app is installed) and notification clicks.
-importScripts('core.js');
+importScripts('i18n.js', 'core.js');
 
-const VERSION = 'tempmon-v2';
-const SHELL = ['./', 'index.html', 'app.js', 'core.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg'];
+const VERSION = 'tempmon-v3';
+const SHELL = ['./', 'index.html', 'app.js', 'i18n.js', 'core.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

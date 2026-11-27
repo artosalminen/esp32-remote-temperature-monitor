@@ -33,8 +33,9 @@ svg text{fill:var(--mut);font-size:11px}
 .icon svg{width:22px;height:22px;margin:0}
 section.card{background:var(--card);border-radius:10px;padding:16px;margin-top:24px}
 section.card h2{font-size:18px;margin:0 0 12px}
+section.card h3{font-size:16px;margin:20px 0 4px}
+select{font:inherit;font-size:15px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 label.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
-label.row:first-of-type{border-top:0}
 label.row span small{display:block;color:var(--mut);font-size:13px}
 input[type=number]{font:inherit;width:6.5em;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);text-align:right}
 input[type=checkbox]{width:20px;height:20px;accent-color:var(--acc)}
@@ -49,39 +50,50 @@ dl.status dd{margin:0}
 </style></head><body><main>
 <header>
   <div>
-    <div class="mut">Current temperature</div>
+    <div class="mut" data-i18n="current">Current temperature</div>
     <div class="now" id="now">–</div>
     <div class="mut" id="upd">Loading…</div>
   </div>
-  <button class="icon" id="openSettings" aria-label="Alert settings" title="Alert settings">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+  <button class="icon" id="openSettings" aria-label="Settings" title="Settings" data-i18n-attr="aria-label,title:settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
 </header>
 <div class="stats" id="stats"></div>
 <div class="tabs" id="tabs">
-  <button data-r="1d" class="on">24 h</button><button data-r="3d">3 days</button><button data-r="7d">7 days</button><button data-r="14d">14 days</button><button data-r="30d">30 days</button><button data-r="90d">90 days</button>
+  <button data-r="1d" class="on" data-i18n="r1d">24 h</button><button data-r="3d" data-i18n="r3d">3 days</button><button data-r="7d" data-i18n="r7d">7 days</button><button data-r="14d" data-i18n="r14d">14 days</button><button data-r="30d" data-i18n="r30d">30 days</button><button data-r="90d" data-i18n="r90d">90 days</button>
 </div>
 <svg id="c" viewBox="0 0 700 260" preserveAspectRatio="none" role="img" aria-label="Temperature chart"></svg>
 <div class="legend mut" id="legend" hidden></div>
 <div class="mut" style="margin-top:8px" id="res"></div>
 
 <section class="card" id="settings" hidden>
-  <h2>Alerts on this device</h2>
-  <label class="row"><span>Alerts enabled<small>Settings are stored only on this device.</small></span><input type="checkbox" id="enabled"></label>
-  <label class="row"><span>Low limit (°C)<small>Alert when the temperature drops below this. Leave empty for no limit.</small></span><input type="number" id="low" step="0.5" inputmode="decimal" placeholder="off"></label>
-  <label class="row"><span>High limit (°C)<small>Alert when the temperature rises above this. Leave empty for no limit.</small></span><input type="number" id="high" step="0.5" inputmode="decimal" placeholder="off"></label>
-  <label class="row"><span>Sensor offline after (min)<small>Alert when no new data arrives for this long. Leave empty for no alert.</small></span><input type="number" id="offlineMin" step="5" min="10" inputmode="numeric" placeholder="off"></label>
-  <label class="row"><span>Hysteresis (°C)<small>How far back inside the limit the temperature must come to count as normal again.</small></span><input type="number" id="hyst" step="0.1" min="0" inputmode="decimal"></label>
-  <label class="row"><span>Notify when back to normal</span><input type="checkbox" id="recover"></label>
+  <h2 data-i18n="settings">Settings</h2>
+  <div class="mut" data-i18n="settingsNote">Stored only on this device.</div>
+  <label class="row"><span data-i18n="language">Language</span>
+    <select id="lang">
+      <option value="auto" id="langAuto">Automatic</option>
+      <option value="en">English</option>
+      <option value="fi">Suomi</option>
+    </select>
+  </label>
+
+  <h3 data-i18n="alerts">Alerts</h3>
+  <label class="row"><span><span data-i18n="enabled">Alerts enabled</span><small data-i18n="enabledHelp"></small></span><input type="checkbox" id="enabled"></label>
+  <label class="row"><span><span data-i18n="low">Low limit (°C)</span><small data-i18n="lowHelp"></small></span><input type="number" id="low" step="0.5" inputmode="decimal" data-i18n-attr="placeholder:off"></label>
+  <label class="row"><span><span data-i18n="high">High limit (°C)</span><small data-i18n="highHelp"></small></span><input type="number" id="high" step="0.5" inputmode="decimal" data-i18n-attr="placeholder:off"></label>
+  <label class="row"><span><span data-i18n="offline">Sensor offline after (min)</span><small data-i18n="offlineHelp"></small></span><input type="number" id="offlineMin" step="5" min="10" inputmode="numeric" data-i18n-attr="placeholder:off"></label>
+  <label class="row"><span><span data-i18n="hyst">Hysteresis (°C)</span><small data-i18n="hystHelp"></small></span><input type="number" id="hyst" step="0.1" min="0" inputmode="decimal"></label>
+  <label class="row"><span data-i18n="recover">Notify when back to normal</span><input type="checkbox" id="recover"></label>
   <div class="actions">
-    <button class="primary" id="save">Save</button>
-    <button id="test">Send test notification</button>
-    <button id="closeSettings">Close</button>
+    <button class="primary" id="save" data-i18n="save">Save</button>
+    <button id="test" data-i18n="test">Send test notification</button>
+    <button id="closeSettings" data-i18n="close">Close</button>
   </div>
   <div class="mut" id="saved" role="status" style="margin-top:8px"></div>
   <dl class="status" id="status"></dl>
 </section>
 </main>
+<script src="i18n.js"></script>
 <script src="core.js"></script>
 <script src="app.js"></script>
 </body></html>

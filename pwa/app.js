@@ -1,17 +1,18 @@
-// Tempmon PWA page: current reading, chart, alert settings and their status.
+// Tempmon PWA page: current reading, chart, settings (language, alerts) and alert status.
 (function () {
   'use strict';
   const T = self.Tempmon;
+  const I = self.TempmonI18n;
   const $ = (id) => document.getElementById(id);
 
   // Chart ranges. Long ranges use ThingSpeak's server-side averaging so a download stays < 1000 points.
   const RANGES = {
-    '1d': { h: 24, label: '24 h' },
-    '3d': { h: 72, label: '3 days', avg: 10 },
-    '7d': { h: 168, label: '7 days', avg: 15 },
-    '14d': { h: 336, label: '14 days', avg: 30 },
-    '30d': { h: 720, label: '30 days', avg: 60 },
-    '90d': { h: 2160, label: '90 days', avg: 240 },
+    '1d': { h: 24 },
+    '3d': { h: 72, avg: 10 },
+    '7d': { h: 168, avg: 15 },
+    '14d': { h: 336, avg: 30 },
+    '30d': { h: 720, avg: 60 },
+    '90d': { h: 2160, avg: 240 },
   };
   const POLL_MS = 120e3; // the board sends a point every 2 min
 
@@ -20,19 +21,43 @@
   let settings = Object.assign({}, T.DEFAULTS);
   const series = {}; // range -> { pts: [[ms, °C]], fetched: ms }
 
-  const f = (x) => (x == null ? '–' : x.toFixed(1) + ' °C');
-  const when = (ms) => new Date(ms).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
-  function ago(ms) {
-    const m = Math.round(ms / 60e3);
-    if (m < 1) return 'just now';
-    if (m < 90) return m + ' min ago';
-    const h = Math.round(m / 60);
-    return h < 48 ? h + ' h ago' : Math.round(h / 24) + ' days ago';
-  }
+  // ---- language -------------------------------------------------------------------------------
+  // The chosen language is mirrored in localStorage so the first paint is already in it;
+  // the real setting lives in IndexedDB with the others, where the service worker reads it.
+  let lang = I.resolve(T.DEFAULTS.lang);
+  try { lang = I.resolve(localStorage.getItem('tempmon-lang') || 'auto'); } catch (e) { /* storage blocked */ }
+  const t = (k, v) => I.t(lang, k, v);
+  const f = (x) => I.temp(lang, x);
+  const when = (ms) => I.dateTime(lang, ms);
+  const ago = (ms) => I.ago(lang, ms);
   function wifi(rssi) {
     if (rssi == null) return '';
-    const q = rssi >= -60 ? 'excellent' : rssi >= -70 ? 'good' : rssi >= -80 ? 'fair' : 'weak';
-    return ' · WiFi ' + rssi + ' dBm (' + q + ')';
+    const q = t('wifiQ')[rssi >= -60 ? 0 : rssi >= -70 ? 1 : rssi >= -80 ? 2 : 3];
+    return t('wifi', { rssi, q });
+  }
+
+  // Put the static texts of the page into the current language.
+  function applyLang() {
+    document.documentElement.lang = lang;
+    T.set('uiLang', lang).catch(() => {}); // for notifications sent by the service worker
+    document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    document.querySelectorAll('[data-i18n-attr]').forEach((el) => {
+      const [attrs, key] = el.dataset.i18nAttr.split(':');
+      for (const a of attrs.split(',')) el.setAttribute(a, t(key));
+    });
+    $('langAuto').textContent = t('langAuto', { name: I.NAMES[I.deviceLang()] });
+  }
+
+  async function setLang(setting) {
+    settings.lang = setting;
+    lang = I.resolve(setting);
+    try { localStorage.setItem('tempmon-lang', setting); } catch (e) { /* storage blocked */ }
+    const stored = Object.assign({}, await T.getSettings(), { lang: setting }); // keep unsaved form edits out
+    await T.set('settings', stored);
+    applyLang();
+    showNow();
+    draw();
+    if (!$('settings').hidden) renderStatus();
   }
 
   // ---- data -----------------------------------------------------------------------------------
@@ -61,7 +86,7 @@
       last = l;
       T.set('last', l).catch(() => {});
     } catch (e) {
-      $('upd').textContent = 'Can’t reach ThingSpeak — showing saved data, retrying…';
+      $('upd').textContent = t('unreachable');
       $('upd').className = 'mut warn';
       draw();
       return;
@@ -79,7 +104,7 @@
     $('now').textContent = f(last.v);
     const age = Date.now() - last.t;
     const stale = age > (settings.offlineMin || 30) * 60e3;
-    $('upd').textContent = (stale ? 'No new data since ' : 'Last reading ') + when(last.t) + ' (' + ago(age) + ')' + wifi(last.rssi);
+    $('upd').textContent = t(stale ? 'noDataSince' : 'lastReading', { time: when(last.t), ago: ago(age) }) + wifi(last.rssi);
     $('upd').className = stale ? 'mut warn' : 'mut';
   }
 
@@ -90,19 +115,18 @@
     const p = s ? s.pts.filter((q) => q[0] >= now - R.h * 3600e3) : [];
     const vals = p.map((q) => q[1]);
     const st = $('stats');
-    $('res').textContent = R.avg
-      ? 'Showing ' + R.avg + '-min averages from ThingSpeak.'
-      : 'Showing the 2-min averages the sensor sends.';
+    $('res').textContent = R.avg ? t('resAvg', { n: R.avg }) : t('resRaw');
     if (!vals.length) {
-      st.innerHTML = '<span class="mut">' + (s ? 'No data in this range.' : 'Loading…') + '</span>';
+      st.innerHTML = '<span class="mut">' + (s ? t('noRange') : t('loading')) + '</span>';
       svg.innerHTML = '';
       $('legend').hidden = true;
       return;
     }
     const min = Math.min(...vals), max = Math.max(...vals), avg = vals.reduce((a, b) => a + b) / vals.length;
-    st.innerHTML = '<div><span class="mut">Min (' + R.label + ')</span><b>' + f(min) + '</b></div>' +
-      '<div><span class="mut">Max (' + R.label + ')</span><b>' + f(max) + '</b></div>' +
-      '<div><span class="mut">Average</span><b>' + f(avg) + '</b></div>';
+    const label = t('r' + range);
+    st.innerHTML = '<div><span class="mut">' + t('min', { r: label }) + '</span><b>' + f(min) + '</b></div>' +
+      '<div><span class="mut">' + t('max', { r: label }) + '</span><b>' + f(max) + '</b></div>' +
+      '<div><span class="mut">' + t('avg') + '</span><b>' + f(avg) + '</b></div>';
 
     // Draw in real pixels so the axis labels stay readable on a phone.
     const W = Math.round(svg.clientWidth) || 700, Ht = 260, L = 36, Rm = 8, Tm = 10, B = 24;
@@ -152,7 +176,7 @@
     const lg = $('legend');
     lg.hidden = !limits.length;
     lg.innerHTML = limits.map(([k, v]) => '<span><i style="border-color:var(--' + k + ')"></i>' +
-      (k === 'low' ? 'Low' : 'High') + ' limit ' + f(v) + (shown.some((q) => q[0] === k) ? '' : ' (off chart)') + '</span>').join('');
+      t(k === 'low' ? 'lowLine' : 'highLine', { v: f(v) }) + (shown.some((q) => q[0] === k) ? '' : t('offChart')) + '</span>').join('');
   }
 
   // ---- settings -------------------------------------------------------------------------------
@@ -165,6 +189,7 @@
     $('offlineMin').value = settings.offlineMin ?? '';
     $('hyst').value = settings.hyst;
     $('recover').checked = settings.recover;
+    $('lang').value = settings.lang || 'auto';
   }
 
   async function backgroundSync(on) {
@@ -189,10 +214,11 @@
       offlineMin: num('offlineMin'),
       hyst: Math.max(0, num('hyst') ?? T.DEFAULTS.hyst),
       recover: $('recover').checked,
+      lang: settings.lang,
     };
     if (next.offlineMin != null) next.offlineMin = Math.max(10, next.offlineMin);
     if (next.low != null && next.high != null && next.low >= next.high) {
-      $('saved').textContent = 'The low limit must be below the high limit.';
+      $('saved').textContent = t('lowHigh');
       return;
     }
     settings = next;
@@ -200,9 +226,7 @@
     await T.set('alertState', {}); // re-evaluate from scratch so new limits apply right away
     fillForm();
     await backgroundSync(settings.enabled && perm === 'granted');
-    $('saved').textContent = !settings.enabled ? 'Saved. Alerts are off.'
-      : perm === 'granted' ? 'Saved. Alerts are on.'
-      : 'Saved, but notifications are not allowed on this device (see status below).';
+    $('saved').textContent = t(!settings.enabled ? 'savedOff' : perm === 'granted' ? 'savedOn' : 'savedNoPerm');
     showNow();
     draw();
     if (settings.enabled && perm === 'granted') await T.check('app');
@@ -215,37 +239,38 @@
     const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
     let n;
-    if (!('Notification' in self)) n = ios && !standalone ? '<span class="warn">Add this app to the Home Screen first (Share → Add to Home Screen), then open it from there.</span>' : '<span class="warn">Not supported by this browser.</span>';
-    else if (Notification.permission === 'granted') n = '<span class="ok">Allowed</span>';
-    else if (Notification.permission === 'denied') n = '<span class="warn">Blocked. Allow notifications for this site in the browser or system settings.</span>';
-    else n = 'Not asked yet. Turn alerts on and press Save.';
-    rows.push(['Notifications', n]);
+    const warn = (s) => '<span class="warn">' + s + '</span>';
+    if (!('Notification' in self)) n = warn(t(ios && !standalone ? 'stIosHome' : 'stUnsupported'));
+    else if (Notification.permission === 'granted') n = '<span class="ok">' + t('stAllowed') + '</span>';
+    else if (Notification.permission === 'denied') n = warn(t('stBlocked'));
+    else n = t('stNotAsked');
+    rows.push([t('stNotif'), n]);
 
-    let bg = '<span class="warn">Not supported by this browser. Limits are checked only while the app is open.</span>';
+    let bg = warn(t('bgUnsupported'));
     const reg = 'serviceWorker' in navigator && await navigator.serviceWorker.getRegistration();
     if (reg && 'periodicSync' in reg) {
       let state = 'prompt';
       try { state = (await navigator.permissions.query({ name: 'periodic-background-sync' })).state; } catch (e) { /* ignore */ }
       const tags = await reg.periodicSync.getTags().catch(() => []);
-      if (!settings.enabled) bg = 'Off (alerts are off).';
-      else if (state !== 'granted') bg = '<span class="warn">Not allowed. ' + (standalone ? 'The browser hasn’t allowed background checks for this app.' : 'Install the app (browser menu → Install app / Add to Home screen) to enable them.') + ' Limits are checked only while the app is open.</span>';
-      else if (tags.includes('tempmon-check')) bg = '<span class="ok">Active.</span> The browser decides how often it runs, typically every 1–12 h depending on how much you use the app and on battery saving.';
-      else bg = '<span class="warn">Not registered. Press Save to try again.</span>';
+      if (!settings.enabled) bg = t('bgOff');
+      else if (state !== 'granted') bg = warn(t('bgNotAllowed') + ' ' + t(standalone ? 'bgNoGrant' : 'bgInstall') + ' ' + t('bgOnlyOpen'));
+      else if (tags.includes('tempmon-check')) bg = '<span class="ok">' + t('bgActive') + '</span> ' + t('bgActiveHelp');
+      else bg = warn(t('bgNotRegistered'));
     }
-    rows.push(['Background checks', bg]);
+    rows.push([t('stBg'), bg]);
 
-    const fmtCheck = (c) => !c ? 'Never' : when(c.t) + ' (' + ago(Date.now() - c.t) + ')' +
-      (c.ok ? (c.alerts ? ', ' + c.alerts + ' alert(s) sent' : ', OK') : '<span class="warn">, failed: ' + c.error + '</span>');
-    rows.push(['Last check', fmtCheck(await T.get('lastCheck'))]);
-    rows.push(['Last background check', fmtCheck(await T.get('lastBackgroundCheck'))]);
+    const fmtCheck = (c) => !c ? t('never') : when(c.t) + ' (' + ago(Date.now() - c.t) + ')' +
+      (c.ok ? ', ' + (c.alerts ? t('checkAlerts', c.alerts) : t('checkOk')) : warn(', ' + t('checkFailed', { e: c.error })));
+    rows.push([t('stLast'), fmtCheck(await T.get('lastCheck'))]);
+    rows.push([t('stLastBg'), fmtCheck(await T.get('lastBackgroundCheck'))]);
     $('status').innerHTML = rows.map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>').join('');
   }
 
   async function test() {
     let perm = 'Notification' in self ? Notification.permission : 'unsupported';
     if (perm === 'default') perm = await Notification.requestPermission();
-    if (perm !== 'granted') { renderStatus(); $('saved').textContent = 'Notifications are not allowed on this device.'; return; }
-    await T.notify('test', 'Tempmon test', 'Notifications work on this device. Now ' + f(last && last.v) + '.');
+    if (perm !== 'granted') { renderStatus(); $('saved').textContent = t('notAllowed'); return; }
+    await T.notify('test', t('nTestTitle'), t('nTestBody', { v: f(last && last.v) }));
     renderStatus();
   }
 
@@ -265,8 +290,9 @@
   });
   $('openSettings').onclick = () => openSettings($('settings').hidden);
   $('closeSettings').onclick = () => openSettings(false);
-  $('save').onclick = () => save().catch((e) => { $('saved').textContent = 'Could not save: ' + e.message; });
-  $('test').onclick = () => test().catch((e) => { $('saved').textContent = 'Could not notify: ' + e.message; });
+  $('save').onclick = () => save().catch((e) => { $('saved').textContent = t('saveFailed', { e: e.message }); });
+  $('test').onclick = () => test().catch((e) => { $('saved').textContent = t('notifyFailed', { e: e.message }); });
+  $('lang').onchange = () => setLang($('lang').value).catch(() => {});
 
   let rz = null;
   addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(draw, 150); });
@@ -282,9 +308,11 @@
   });
 
   (async () => {
+    applyLang();
+    $('upd').textContent = t('loading');
     if (!T.CHANNEL) {
       $('now').textContent = '–';
-      $('upd').textContent = 'No ThingSpeak channel configured. Set the THINGSPEAK_CHANNEL_ID variable for the deploy workflow, or open this page with ?channel=<id> when testing locally.';
+      $('upd').textContent = t('noChannel');
       $('upd').className = 'mut warn';
       $('stats').innerHTML = '';
       return;
@@ -293,6 +321,8 @@
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js' + location.search).catch(() => {});
     try {
       settings = await T.getSettings();
+      if (I.resolve(settings.lang) !== lang) { lang = I.resolve(settings.lang); applyLang(); }
+      try { localStorage.setItem('tempmon-lang', settings.lang); } catch (e) { /* storage blocked */ }
       const raw = await T.get('raw24');
       if (raw) series['1d'] = raw;
       last = await T.get('last');

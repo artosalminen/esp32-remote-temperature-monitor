@@ -199,6 +199,9 @@ directly.
   notification when things are back to normal (with hysteresis so it doesn't flap). Each check
   looks at all points measured since the previous check, so a short dip between two checks is
   still caught. The limits are drawn on the chart.
+- **English and Finnish.** The language follows the phone's language settings (Finnish if
+  Finnish is among the preferred languages before English, otherwise English), and each user can
+  pick one in the settings. Notifications use the same language. Texts are in `pwa/i18n.js`.
 - **Settings stay on the phone** (IndexedDB). No accounts, no server, nothing to administer;
   each user sets their own limits.
 - **Free tier friendly:** reads from a public channel don't count toward ThingSpeak's message

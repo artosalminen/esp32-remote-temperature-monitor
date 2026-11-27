@@ -19,7 +19,9 @@
     offlineMin: 60,   // minutes without new data, null = off
     hyst: 0.5,        // °C the value must come back inside a limit before it counts as normal
     recover: true,    // also notify when back to normal
+    lang: 'auto',     // 'auto' (device language), 'en' or 'fi'
   };
+  const I = g.TempmonI18n;
 
   // ---- tiny IndexedDB key-value store ------------------------------------------------------
   let dbp = null;
@@ -93,14 +95,6 @@
   }
 
   // ---- alerts ------------------------------------------------------------------------------
-  const fmt = (v) => (v == null ? '–' : v.toFixed(1) + ' °C');
-  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  function ago(ms) {
-    const m = Math.round(ms / 60e3);
-    if (m < 90) return m + ' min';
-    const h = Math.round(m / 60);
-    return h < 48 ? h + ' h' : Math.round(h / 24) + ' days';
-  }
 
   function registration() {
     if (g.registration) return Promise.resolve(g.registration); // inside the service worker
@@ -126,6 +120,9 @@
     const s = await getSettings();
     const now = Date.now();
     const rec = { t: now, source, ok: false };
+    // Notifications are written in the language the page last showed ('uiLang'), so 'auto'
+    // means the same thing here as in the page even if the worker sees other device settings.
+    const L = I.resolve(s.lang !== 'auto' ? s.lang : (await get('uiLang').catch(() => null)) || 'auto'), tr = (k, v) => I.t(L, k, v), fmt = (v) => I.temp(L, v), clock = (ms) => I.clock(L, ms);
     try {
       const st = (await get('alertState')) || {};
       // Raw points since the previous check (at most 3 days back; the first check looks back 2 h).
@@ -147,12 +144,12 @@
         for (const p of pts) if (p[1] < min[1]) min = p;
         if (st.low !== 'alert' && min[1] < s.low) {
           const back = st.lastV >= s.low + s.hyst;
-          notes.push(['low', 'Low temperature: ' + fmt(min[1]),
-            'Below your ' + fmt(s.low) + ' limit at ' + clock(min[0]) + (back ? ', now ' + fmt(st.lastV) : '') + '.']);
+          notes.push(['low', tr('nLowTitle', { v: fmt(min[1]) }),
+            tr('nLowBody', { limit: fmt(s.low), time: clock(min[0]), now: back ? tr('nNow', { v: fmt(st.lastV) }) : '' })]);
           st.low = back ? 'ok' : 'alert';
         } else if (st.low === 'alert' && st.lastV >= s.low + s.hyst) {
           st.low = 'ok';
-          if (s.recover) notes.push(['low', 'Temperature back to normal', 'Now ' + fmt(st.lastV) + ' (low limit ' + fmt(s.low) + ').']);
+          if (s.recover) notes.push(['low', tr('nBackTitle'), tr('nBackLow', { v: fmt(st.lastV), limit: fmt(s.low) })]);
         }
       }
       if (s.low == null) st.low = 'ok';
@@ -162,12 +159,12 @@
         for (const p of pts) if (p[1] > max[1]) max = p;
         if (st.high !== 'alert' && max[1] > s.high) {
           const back = st.lastV <= s.high - s.hyst;
-          notes.push(['high', 'High temperature: ' + fmt(max[1]),
-            'Above your ' + fmt(s.high) + ' limit at ' + clock(max[0]) + (back ? ', now ' + fmt(st.lastV) : '') + '.']);
+          notes.push(['high', tr('nHighTitle', { v: fmt(max[1]) }),
+            tr('nHighBody', { limit: fmt(s.high), time: clock(max[0]), now: back ? tr('nNow', { v: fmt(st.lastV) }) : '' })]);
           st.high = back ? 'ok' : 'alert';
         } else if (st.high === 'alert' && st.lastV <= s.high - s.hyst) {
           st.high = 'ok';
-          if (s.recover) notes.push(['high', 'Temperature back to normal', 'Now ' + fmt(st.lastV) + ' (high limit ' + fmt(s.high) + ').']);
+          if (s.recover) notes.push(['high', tr('nBackTitle'), tr('nBackHigh', { v: fmt(st.lastV), limit: fmt(s.high) })]);
         }
       }
       if (s.high == null) st.high = 'ok';
@@ -176,10 +173,10 @@
       if (s.enabled && s.offlineMin != null) {
         if (st.off !== 'alert' && age > s.offlineMin * 60e3) {
           st.off = 'alert';
-          notes.push(['offline', 'Sensor offline', 'No new data for ' + ago(age) + '. Last reading ' + fmt(st.lastV) + '.']);
+          notes.push(['offline', tr('nOffTitle'), tr('nOffBody', { ago: I.ago(L, age), v: fmt(st.lastV) })]);
         } else if (st.off === 'alert' && age <= s.offlineMin * 60e3) {
           st.off = 'ok';
-          if (s.recover) notes.push(['offline', 'Sensor back online', 'Now ' + fmt(st.lastV) + '.']);
+          if (s.recover) notes.push(['offline', tr('nOnTitle'), tr('nOnBody', { v: fmt(st.lastV) })]);
         }
       } else {
         st.off = 'ok';
