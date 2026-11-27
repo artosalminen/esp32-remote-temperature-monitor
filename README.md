@@ -7,6 +7,8 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
   temperature plus a 24 h / 3 d / 7 d / 14 d chart. No app, no login.
 - **You** get the full long-term history in a [ThingSpeak](https://thingspeak.mathworks.com)
   channel, and from there in Home Assistant (or anything else that can read an HTTP API).
+- **Anyone, anywhere** can install the phone app at <https://slmnn.fi/tempmon>, a PWA that
+  reads the public ThingSpeak channel and sends alerts based on limits set on each phone.
 - **No inbound access needed** at the site: no port forwarding, DDNS, VPN or local server.
   The board only makes outgoing HTTPS requests.
 
@@ -180,6 +182,45 @@ The hotspot reappears whenever the WiFi is lost for more than a minute.
 router. Reserve a fixed IP for the board in the site router's DHCP settings and put a QR code
 with `http://<that-ip>/` on the enclosure.
 
+## Phone app (PWA)
+
+`pwa/` is a static Progressive Web App that shows the ThingSpeak data the same way as the board's
+own page and lets each user set their own alert limits. It is published by
+`.github/workflows/pages.yml` to <https://slmnn.fi/esp32-remote-temperature-monitor/>, and
+<https://slmnn.fi/tempmon> redirects there.
+
+<img src="docs/images/pwa.png" alt="The PWA: current temperature, chart with the user's limit lines, and the alert settings with their status" width="320">
+
+- **Data:** current value, min/max/average and a 24 h / 3 d / 7 d / 14 d / 30 d / 90 d chart.
+  24 h uses the raw 2-min points. Longer ranges use ThingSpeak's server-side `average`
+  (10–240 min), so a download stays under 1 000 points. Also shows the WiFi RSSI.
+- **Alerts:** a low limit, a high limit, sensor offline after N minutes, and optionally a
+  notification when the value is back to normal (with hysteresis). Every check looks at all
+  points measured since the previous check, so a short dip between two checks is still caught.
+- **Settings stay on the phone** (IndexedDB). There is no server and no account.
+- **Free tier:** reads from a public channel don't count toward ThingSpeak's message limit.
+  An open app makes about three small requests every 2 minutes, and only fetches new points.
+  Background checks add one request each.
+
+### Background checks: what works where
+
+There is no push server, so checks while the app is closed rely on
+[Periodic Background Sync](https://developer.mozilla.org/docs/Web/API/Web_Periodic_Background_Synchronization_API):
+
+| Platform | While the app is open | While the app is closed |
+|---|---|---|
+| Android, Chrome / Edge, **installed** app | Every 2 min | Yes, when the browser decides: typically every 1–12 h depending on how much the app is used and on battery saving |
+| Android, not installed / Firefox | Every 2 min | No |
+| iPhone / iPad (Home Screen app, iOS 16.4+) | Every 2 min | No (Safari has no background sync without a push server) |
+| Desktop Chrome / Edge, installed | Every 2 min | Yes, while the browser is running |
+
+The settings view shows on each device whether notifications are allowed, whether background
+checks are active, and when the last (background) check ran. For reliable, prompt alerts use
+the Home Assistant route below, or add a Web Push server later.
+
+To change the channel, edit `CHANNEL` in `pwa/core.js`. After changing app files, bump `VERSION`
+in `pwa/sw.js` so installed apps pick up the new version.
+
 ## Home Assistant
 
 Home Assistant can't reach the board directly, so it reads from ThingSpeak instead. The
@@ -238,6 +279,8 @@ on the board's own page.
 | `tempmon.yaml` | ESPHome device configuration |
 | `tempmon_web.h` | Ring buffer, public web page and JSON endpoint (C++ include) |
 | `secrets.example.yaml` | Template for `secrets.yaml` |
+| `pwa/` | Phone app (PWA): page, service worker, manifest, icons |
+| `.github/workflows/pages.yml` | Publishes `pwa/` to GitHub Pages |
 | `docs/images/` | Diagrams and screenshot used in this README |
 
 ## License
