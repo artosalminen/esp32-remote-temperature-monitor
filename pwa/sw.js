@@ -2,11 +2,15 @@
 // Chromium on Android/desktop when the app is installed) and notification clicks.
 importScripts('i18n.js', 'core.js');
 
-const VERSION = 'tempmon-v3';
+const VERSION = 'tempmon-v4';
 const SHELL = ['./', 'index.html', 'app.js', 'i18n.js', 'core.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' bypasses the browser's HTTP cache (GitHub Pages allows 10 min), so a new
+  // version never stores an old app.js next to a new index.html.
+  e.waitUntil(caches.open(VERSION)
+    .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -24,7 +28,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     const hit = await cache.match(e.request, { ignoreSearch: true });
-    const net = fetch(e.request).then((r) => {
+    const net = fetch(e.request.url, { cache: 'no-cache' }).then((r) => {
       if (r.ok) cache.put(e.request, r.clone());
       return r;
     });

@@ -206,6 +206,9 @@
     const wantOn = $('enabled').checked;
     let perm = 'Notification' in self ? Notification.permission : 'unsupported';
     if (wantOn && perm === 'default') perm = await Notification.requestPermission();
+    // Take the language from the selector itself, in case its change event never ran.
+    const chosen = $('lang').value;
+    if (chosen !== settings.lang) await setLang(chosen);
 
     const next = {
       enabled: wantOn,
@@ -214,7 +217,7 @@
       offlineMin: num('offlineMin'),
       hyst: Math.max(0, num('hyst') ?? T.DEFAULTS.hyst),
       recover: $('recover').checked,
-      lang: settings.lang,
+      lang: chosen,
     };
     if (next.offlineMin != null) next.offlineMin = Math.max(10, next.offlineMin);
     if (next.low != null && next.high != null && next.low >= next.high) {
@@ -292,7 +295,9 @@
   $('closeSettings').onclick = () => openSettings(false);
   $('save').onclick = () => save().catch((e) => { $('saved').textContent = t('saveFailed', { e: e.message }); });
   $('test').onclick = () => test().catch((e) => { $('saved').textContent = t('notifyFailed', { e: e.message }); });
-  $('lang').onchange = () => setLang($('lang').value).catch(() => {});
+  const onLang = () => { if ($('lang').value !== settings.lang) setLang($('lang').value).catch(() => {}); };
+  $('lang').addEventListener('change', onLang);
+  $('lang').addEventListener('input', onLang);
 
   let rz = null;
   addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(draw, 150); });
