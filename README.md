@@ -15,9 +15,6 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
 
 ![The board's own page: current temperature, min/max/average and a chart](docs/images/local-page.png)
 
-Write-up with background and design notes:
-[How to build a remote temperature monitor with ESP32](https://slmnn.fi/posts/how-to-build-a-remote-temperature-monitor-with-esp32/)
-
 ## How it works
 
 ![Data flow: the sensor feeds the ESP32 at the site, which serves a read-only page to phones on the site WiFi and sends HTTPS uploads to ThingSpeak. Home Assistant at home polls ThingSpeak and sends Telegram alerts. Nothing connects into the site](docs/images/architecture.svg)
