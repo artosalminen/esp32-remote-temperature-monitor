@@ -55,6 +55,7 @@
   }
 
   async function refresh() {
+    if (!T.CHANNEL) return;
     try {
       const [l] = await Promise.all([T.fetchLast(), loadRange(range)]);
       last = l;
@@ -281,7 +282,15 @@
   });
 
   (async () => {
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if (!T.CHANNEL) {
+      $('now').textContent = '–';
+      $('upd').textContent = 'No ThingSpeak channel configured. Set the THINGSPEAK_CHANNEL_ID variable for the deploy workflow, or open this page with ?channel=<id> when testing locally.';
+      $('upd').className = 'mut warn';
+      $('stats').innerHTML = '';
+      return;
+    }
+    // Pass ?channel= on to the service worker too (only used when running unbuilt, locally).
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js' + location.search).catch(() => {});
     try {
       settings = await T.getSettings();
       const raw = await T.get('raw24');

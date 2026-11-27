@@ -7,8 +7,9 @@ ESP32 and a DS18x20 1-Wire sensor, running [ESPHome](https://esphome.io).
   temperature plus a 24 h / 3 d / 7 d / 14 d chart. No app, no login.
 - **You** get the full long-term history in a [ThingSpeak](https://thingspeak.mathworks.com)
   channel, and from there in Home Assistant (or anything else that can read an HTTP API).
-- **Anyone, anywhere** can install the phone app at <https://slmnn.fi/tempmon>, a PWA that
-  reads the public ThingSpeak channel and sends alerts based on limits set on each phone.
+- **Anyone, anywhere** can use the optional [phone app](#phone-app-pwa): a PWA that reads
+  the public ThingSpeak channel and alerts when the temperature leaves limits each user sets
+  on their own phone.
 - **No inbound access needed** at the site: no port forwarding, DDNS, VPN or local server.
   The board only makes outgoing HTTPS requests.
 
@@ -184,42 +185,92 @@ with `http://<that-ip>/` on the enclosure.
 
 ## Phone app (PWA)
 
-`pwa/` is a static Progressive Web App that shows the ThingSpeak data the same way as the board's
-own page and lets each user set their own alert limits. It is published by
-`.github/workflows/pages.yml` to <https://slmnn.fi/esp32-remote-temperature-monitor/>, and
-<https://slmnn.fi/tempmon> redirects there.
+`pwa/` is an optional phone app: a static Progressive Web App that shows the ThingSpeak data the
+same way as the board's own page, from anywhere, and lets each user set their own alert limits.
+It's plain HTML/JS with no build step and no server of its own: phones read the ThingSpeak API
+directly.
 
 <img src="docs/images/pwa.png" alt="The PWA: current temperature, chart with the user's limit lines, and the alert settings with their status" width="320">
 
-- **Data:** current value, min/max/average and a 24 h / 3 d / 7 d / 14 d / 30 d / 90 d chart.
-  24 h uses the raw 2-min points. Longer ranges use ThingSpeak's server-side `average`
-  (10–240 min), so a download stays under 1 000 points. Also shows the WiFi RSSI.
-- **Alerts:** a low limit, a high limit, sensor offline after N minutes, and optionally a
-  notification when the value is back to normal (with hysteresis). Every check looks at all
-  points measured since the previous check, so a short dip between two checks is still caught.
-- **Settings stay on the phone** (IndexedDB). There is no server and no account.
-- **Free tier:** reads from a public channel don't count toward ThingSpeak's message limit.
-  An open app makes about three small requests every 2 minutes, and only fetches new points.
-  Background checks add one request each.
+### Features
+
+- **Data:** current value, last reading time, WiFi RSSI, min/max/average and a
+  24 h / 3 d / 7 d / 14 d / 30 d / 90 d chart. 24 h uses the raw 2-min points. Longer ranges use
+  ThingSpeak's server-side `average` (10–240 min), so a download stays under 1 000 points.
+  The last 24 h is kept on the phone, so the app opens instantly and works offline.
+- **Alerts:** a low limit, a high limit, *sensor offline* after N minutes, and optionally a
+  notification when things are back to normal (with hysteresis so it doesn't flap). Each check
+  looks at all points measured since the previous check, so a short dip between two checks is
+  still caught. The limits are drawn on the chart.
+- **Settings stay on the phone** (IndexedDB). No accounts, no server, nothing to administer;
+  each user sets their own limits.
+- **Free tier friendly:** reads from a public channel don't count toward ThingSpeak's message
+  limit. An open app makes about three small requests every 2 minutes and only fetches new
+  points; a background check is one request.
 
 ### Background checks: what works where
 
-There is no push server, so checks while the app is closed rely on
-[Periodic Background Sync](https://developer.mozilla.org/docs/Web/API/Web_Periodic_Background_Synchronization_API):
+Without a push server, checks while the app is closed rely on
+[Periodic Background Sync](https://developer.mozilla.org/docs/Web/API/Web_Periodic_Background_Synchronization_API),
+which only Chromium browsers support:
 
 | Platform | While the app is open | While the app is closed |
 |---|---|---|
 | Android, Chrome / Edge, **installed** app | Every 2 min | Yes, when the browser decides: typically every 1–12 h depending on how much the app is used and on battery saving |
 | Android, not installed / Firefox | Every 2 min | No |
-| iPhone / iPad (Home Screen app, iOS 16.4+) | Every 2 min | No (Safari has no background sync without a push server) |
+| iPhone / iPad (Home Screen app, iOS 16.4+) | Every 2 min | No |
 | Desktop Chrome / Edge, installed | Every 2 min | Yes, while the browser is running |
 
-The settings view shows on each device whether notifications are allowed, whether background
-checks are active, and when the last (background) check ran. For reliable, prompt alerts use
-the Home Assistant route below, or add a Web Push server later.
+The alert settings show on each device whether notifications are allowed, whether background
+checks are active, and when the last (background) check ran. The PWA is fine for "something
+is off" alerts; for prompt, guaranteed alerts use [Home Assistant](#home-assistant) or add a
+Web Push server.
 
-To change the channel, edit `CHANNEL` in `pwa/core.js`. After changing app files, bump `VERSION`
-in `pwa/sw.js` so installed apps pick up the new version.
+### Set up your own
+
+The app has no settings in its code. The channel ID is given to the deploy workflow as a
+repository variable and written into the published files at build time.
+
+1. **Make the channel public** (*Sharing → Share channel view with everyone*). The app reads
+   without a key. A static web app can't keep a Read API Key secret: anything built into it is
+   downloaded by every user.
+2. **Try it locally:** `cd pwa && python3 -m http.server 8000`, then open
+   `http://localhost:8000/?channel=<CHANNEL_ID>`. Service workers and notifications work on
+   `localhost`. Without `?channel=` the page says that no channel is configured.
+3. **Publish with GitHub Pages** using the included workflow `.github/workflows/pages.yml`:
+   1. Fork or push this repository to GitHub.
+   2. Add a repository variable **`THINGSPEAK_CHANNEL_ID`** with your channel ID: *Settings →
+      Secrets and variables → Actions → Variables → New repository variable*, or
+      `gh variable set THINGSPEAK_CHANNEL_ID -b <CHANNEL_ID>`. The workflow stops with an error
+      if it is missing.
+   3. *Settings → Pages → Build and deployment → Source:* **GitHub Actions**.
+   4. Push a change under `pwa/`, or run *Deploy PWA to GitHub Pages* by hand from the
+      *Actions* tab. Run it again after changing the variable.
+
+   The app is then at `https://<user>.github.io/<repo>/`, or `https://<your-domain>/<repo>/`
+   if your GitHub user site has a custom domain. For a shorter address, put a redirect page at
+   the path you want, for example `/tempmon/index.html` on your main site:
+
+   ```html
+   <!doctype html><meta charset="utf-8"><title>Tempmon</title>
+   <meta http-equiv="refresh" content="0; url=/<repo>/">
+   <a href="/<repo>/">Open Tempmon</a>
+   ```
+
+   **Other static hosts** work too, as long as they serve HTTPS; all paths are relative. Copy
+   `pwa/` and replace `__THINGSPEAK_CHANNEL_ID__` in `core.js` with your channel ID, as the
+   workflow does.
+4. **Updating:** after changing app files, bump `VERSION` in `pwa/sw.js` so installed apps
+   fetch the new version (they switch to it on the next launch).
+
+### Using it
+
+1. Open the app's address on the phone.
+2. **Install it:** on Android, browser menu → *Install app* (or *Add to Home screen*). On
+   iPhone, *Share → Add to Home Screen* and open it from there; iOS only allows notifications
+   for Home Screen apps.
+3. Tap the bell, turn **Alerts enabled** on, set the limits and press **Save**. Allow
+   notifications when asked. *Send test notification* checks that they arrive.
 
 ## Home Assistant
 

@@ -2,7 +2,7 @@
 // Chromium on Android/desktop when the app is installed) and notification clicks.
 importScripts('core.js');
 
-const VERSION = 'tempmon-v1';
+const VERSION = 'tempmon-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'core.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg'];
 
 self.addEventListener('install', (e) => {

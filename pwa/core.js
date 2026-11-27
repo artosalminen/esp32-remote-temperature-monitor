@@ -4,7 +4,11 @@
 (function (g) {
   'use strict';
 
-  const CHANNEL = 3594127;
+  // The deploy workflow replaces the placeholder with the THINGSPEAK_CHANNEL_ID repository
+  // variable. Unreplaced (running from a checkout), the ID comes from ?channel=<id> in the URL.
+  const BUILT_CHANNEL = '__THINGSPEAK_CHANNEL_ID__';
+  const CHANNEL = /^\d+$/.test(BUILT_CHANNEL) ? BUILT_CHANNEL
+    : (new URLSearchParams(g.location.search).get('channel') || '').replace(/\D/g, '') || null;
   const API = 'https://api.thingspeak.com/channels/' + CHANNEL;
   const STEP_MS = 120e3; // the board sends one 2-min average per entry
 
